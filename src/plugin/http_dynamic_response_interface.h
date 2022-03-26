@@ -3,17 +3,20 @@
 
 #include "kanon/util/noncopyable.h"
 
+#include "common/types.h"
 #include "common/http_response.h"
 
-namespace plugin {
-
+namespace http {
 
 class HttpDynamicResponseInterface {
- public:
-  DISABLE_EVIL_COPYABLE(HttpDynamicResponseInterface)
+public:
+  HttpDynamicResponseInterface() = default;  
+  virtual ~HttpDynamicResponseInterface() = default;
+  virtual HttpResponse GenResponseForGet(ArgsMap const& args) = 0;
+  virtual HttpResponse GenResponseForPost(std::string const& body) = 0;
 
-  virtual http::HttpResponse GenResponse();
-  
+private:
+  DISABLE_EVIL_COPYABLE(HttpDynamicResponseInterface)
 };
 
 } // namspace plugin
