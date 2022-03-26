@@ -5,7 +5,7 @@
 
 #include "kanon/util/mem.h"
 
-#include "http/http_response.h"
+#include "common/http_response.h"
 
 #include "util/cgi_parse.h"
 
