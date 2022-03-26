@@ -1,9 +1,12 @@
 #ifndef KANON_HTTP_SESSION_H
 #define KANON_HTTP_SESSION_H
 
-#include "kanon/util/noncopyable.h"
-#include "kanon/net/user_server.h"
+#include <kanon/util/noncopyable.h>
+#include <kanon/util/optional.h>
+#include <kanon/net/user_server.h>
+#include <kanon/net/timer/timer_id.h>
 #include <kanon/string/string_view.h>
+#include <kanon/thread/atomic_counter.h>
 
 #include "common/types.h"
 #include "common/http_response.h"
@@ -13,10 +16,10 @@
 
 namespace http {
 
+class HttpServer;
+
 class HttpSession : kanon::noncopyable {
 private:
-  using FilePtr = std::shared_ptr<File>;
-
   enum ParsePhase {
     kHeaderLine = 0,
     kHeaderFields,
@@ -32,31 +35,42 @@ private:
 public:
   HttpSession();
 
-  explicit HttpSession(kanon::TcpConnectionPtr const& conn);
+  explicit HttpSession(HttpServer& server, kanon::TcpConnectionPtr const& conn);
   ~HttpSession() noexcept;
 
   // For debugging 
   void GetErrorResponse() const
   { GetClientError(meta_error_.first, meta_error_.second); }
+
+  uint32_t GetId() const noexcept
+  { return id_; }
+
 private:
   using MetaError = std::pair<HttpStatusCode, kanon::StringView>;
 
   void OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv);
 
-  // void SendFile(FilePtr const& file);
-  // void ServeFile(TcpConnectionPtr const& conn);
-  // static void LastWriteComplete(kanon::TcpConnectionPtr const& conn);
-  // static void CloseConnection(kanon::TcpConnectionPtr const& conn);
+  // Static contents
+  void ServeFile();
+  void SendFile(int fd);
 
+  // Dynamic contents
+  void ServeDynamicContent();
+  ArgsMap SplitArgs();
+
+  void CloseConnection();
+  void NotImplementation();
+
+  // Parse http request
   ParseResult Parse(kanon::Buffer& buffer);
-
   ParseResult ParseHeaderLine(kanon::StringView header_line);
   ParseResult ParseComplexUrl();
-
   ParseResult ParseHeaderField(kanon::StringView header);
   void ParseMethod(kanon::StringView method) noexcept;
   void ParseVersionCode(int version_code) noexcept;
+  void Reset();
 
+  // Error handling
   template<size_t N>
   void FillMetaError(HttpStatusCode code, char const (&msg)[N]);
 
@@ -64,19 +78,9 @@ private:
   void FillMetaErrorOfBadRequest(char const (&msg)[N])
   { FillMetaError(HttpStatusCode::k400BadRequest, msg); }
 
-  void Reset();
+  void SendErrorResponse();
 
-  // void SendErrorResponse(HttpStatusCode code, kanon::StringView msg);
-  // void SendErrorResponse(HttpStatusCode code)
-  // { SendErrorResponse(code, kanon::MakeStringView("")); }
-
-  // HttpServer* server_;
-  static char const kHomePage_[];
-  static char const kRootPath_[];
-  static char const kHtmlPath_[];
-  static char const kHost_[]; 
-  static constexpr int32_t kFileBufferSize_ = 1 << 16;
-
+  HttpServer* server_;
   kanon::TcpConnection* conn_;
 
   ParsePhase parse_phase_;
@@ -90,7 +94,15 @@ private:
 
   HttpMethod method_; 
   HttpVersion version_;
+  bool is_keep_alive_;
 
+  kanon::optional<kanon::TimerId> timer_id_;
+
+  // For debugging
+  uint32_t id_;
+  static kanon::AtomicCounter32 counter_;
+
+  static constexpr int32_t kFileBufferSize_ = 1 << 16;
 };
 
 template<size_t N>

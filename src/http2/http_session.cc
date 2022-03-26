@@ -1,40 +1,50 @@
 #include "http_session.h"
 
-#include <algorithm>
-#include <cctype>
+#include <unistd.h>
+#include <fcntl.h>
+
+#include <kanon/log/logger.h>
 #include <kanon/net/buffer.h>
 #include <kanon/net/callback.h>
 #include <kanon/string/string_view.h>
 #include <kanon/util/macro.h>
 #include <kanon/util/ptr.h>
-#include <type_traits>
 
-#include "http/http_request_parser.h"
+
+#include "common/http_response.h"
+#include "config/http_config.h"
 #include "common/http_constant.h"
+#include "plugin/plugin_loader.h"
+#include "plugin/http_dynamic_response_interface.h"
+#include "unix/fd_wrapper.h"
+
+#include "http_server2.h"
 
 using namespace kanon;
+using namespace unix;
 
 namespace http {
 
-char const HttpSession::kRootPath_[] = "/root/kanon_http/http";
-char const HttpSession::kHtmlPath_[] = "/root/kanon_http/html";
-char const HttpSession::kHomePage_[] = "index.html";
-char const HttpSession::kHost_[] = "47.99.92.230";
+AtomicCounter32 HttpSession::counter_(1);
 
 HttpSession::HttpSession()
-  : conn_(nullptr)
+  : server_(nullptr)
+  , conn_(nullptr)
   , parse_phase_(kHeaderLine)
   , meta_error_()
   , is_static_(true)
   , is_complex_(false)
   , method_(HttpMethod::kNotSupport)
   , version_(HttpVersion::kNotSupport)
+  , timer_id_()
+  , id_(counter_.GetAndAdd(1))
 {
 }
 
-HttpSession::HttpSession(TcpConnectionPtr const& conn)
+HttpSession::HttpSession(HttpServer& server, TcpConnectionPtr const& conn)
   : HttpSession()
 {
+  server_ = &server;
   conn_ = kanon::GetPointer(conn);
 
   conn_->SetMessageCallback(std::bind(
@@ -47,8 +57,243 @@ HttpSession::~HttpSession() noexcept
 
 void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv_time)
 {
-  KANON_UNUSED(conn);KANON_UNUSED(recv_time);
+  KANON_UNUSED(conn);
+  KANON_UNUSED(recv_time);
+  // FIXME Implementation timeout disconnection
+
+  if (server_->timer_id_) {
+    conn->GetLoop()->CancelTimer(*server_->timer_id_);
+    server_->timer_id_.SetInvalid();
+
+    LOG_DEBUG << "The connection-timeout timer is reset";
+  }
+
+  if (timer_id_) {
+    conn->GetLoop()->CancelTimer(*timer_id_);
+    timer_id_.SetInvalid();
+
+    LOG_DEBUG << "The keep-alive timer is reset";
+  }
+
+  ParseResult ret;
+  if ( ( ret = Parse(buffer) ) == kGood) {
+    if (url_ == "/") {
+      url_ += g_config.homepage_path;
+    }
+    url_.insert(0, g_config.root_path.data(), g_config.root_path.size());
+    LOG_DEBUG << "content_path = " << url_;
+
+    auto iter = headers_.find("Connection");
+    if (iter != std::end(headers_) && 
+        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size())) {
+      is_keep_alive_ = true;
+    }
+
+    switch (method_) {
+      case HttpMethod::kGet:
+        if (is_static_) {
+          ServeFile();
+        }
+        else {
+          ServeDynamicContent();
+        }
+      break;
+
+      case HttpMethod::kPost:
+        ServeDynamicContent();        
+      break;
+
+      default:
+        NotImplementation();
+    }      
+  }
+
+  if (ret == kError) {
+    SendErrorResponse();
+  }
+}
+
+void HttpSession::ServeFile()
+{
+  const int fd = ::open(url_.c_str(), O_RDONLY);
+
+  if (fd < 0) {
+    if (errno == ENOENT) {
+      FillMetaError(
+        HttpStatusCode::k404NotFound, 
+        "The file does not exist");
+    }
+    else {
+      FillMetaError(
+        HttpStatusCode::k500InternalServerError, 
+        "The page does exists, but error occurred in server");
+      LOG_SYSERROR << "Failed to open the file: " << url_
+          << "(But it exists)";
+    }
+    
+    SendErrorResponse();
+    return ;
+  }
+
+  HttpResponse response(true);
+
+  off_t file_size = ::lseek(fd, 0, SEEK_END);
+  ::lseek(fd, 0, SEEK_SET);
+
+  LOG_DEBUG << "file_size = " << file_size;
+
+  response.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11)
+          .AddHeader("Content-Length", std::to_string(file_size));
+
+  if (is_keep_alive_) {
+    response.AddHeader("Connection", "Keep-Alive");
+  }
   
+  response.AddBlackLine();
+
+  server_->EmplaceOffset(this, 0);
+
+  conn_->SetWriteCompleteCallback([fd, this](TcpConnectionPtr const& conn) {
+    SendFile(fd);
+  });
+
+  LOG_DEBUG << "response: " << response.GetBuffer().ToStringView();
+  conn_->Send(response.GetBuffer());
+  
+}
+
+void HttpSession::SendFile(int fd)
+{
+  char buf[kFileBufferSize_];
+
+  auto off = server_->SearchOffset(this);
+  assert(off);
+  auto readn = ::pread(fd, buf, sizeof buf, *off);
+
+  if (readn != 0) {
+    LOG_TRACE << "Sending file...";
+    server_->offset_map_[this] += readn;
+    conn_->Send(buf, readn);
+  }
+  else {
+    LOG_TRACE << "File has been sent";
+    FDWrapper wrapper(fd);
+    server_->EraseOffset(this);
+
+    conn_->SetWriteCompleteCallback(WriteCompleteCallback());
+
+  }
+
+  CloseConnection();
+}
+
+void HttpSession::ServeDynamicContent()
+{
+  plugin::PluginLoader<HttpDynamicResponseInterface> loader;
+
+  assert(!is_static_);
+
+  LOG_DEBUG << "query = " << query_;
+  auto error = loader.Open(url_);
+
+  if (error) {
+    LOG_SYSERROR << "Failed to open shared object " << url_;
+    FillMetaError(HttpStatusCode::k404NotFound, "The page is not found");
+    SendErrorResponse();
+    return ;
+  }
+
+  auto create_func = loader.GetCreateFunc();
+
+  std::unique_ptr<HttpDynamicResponseInterface> response(create_func());
+
+  if (method_ == HttpMethod::kPost) {
+    NotImplementation();
+  }
+  else if (method_ == HttpMethod::kGet) {
+    // The Content-Length is set by plugin
+    HttpResponse first(true);
+    first.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11);
+    
+    if (is_keep_alive_) {
+      first.AddHeader("Connection", "Keep-Alive");
+    }
+  
+    conn_->Send(first.GetBuffer());
+    conn_->Send(response->GenResponseForGet(SplitArgs()).GetBuffer());
+  }
+
+  CloseConnection();
+}
+
+ArgsMap HttpSession::SplitArgs()
+{
+  StringView::size_type equal_pos = StringView::npos;
+  StringView::size_type and_pos = StringView::npos;
+  std::string key;
+  std::string val;
+
+  ArgsMap kvs;
+
+  StringView query = query_;
+
+  LOG_TRACE << "Start parsing the query args...";
+
+  for (;;) {
+    equal_pos = query.find('=');
+    and_pos = query.find('&');
+
+    // and_pos == npos is also ok
+    kvs.emplace(
+      query.substr_range(0, equal_pos).ToString(),
+      query.substr_range(equal_pos+1, and_pos).ToString());
+
+    if (and_pos == StringView::npos) break;
+
+    query.remove_prefix(and_pos+1);
+  }
+
+  LOG_TRACE << "The query args have been parsed";
+
+  LOG_DEBUG << "The query args map is following: ";
+
+  for (auto const& kv : kvs) {
+    LOG_DEBUG << "[" << kv.first << ": " << kv.second << "]";
+  }
+
+  return kvs;
+}
+
+void HttpSession::CloseConnection()
+{
+  if (is_keep_alive_) {
+    LOG_DEBUG << "Keep-Alive connection will keep 10s if no new message coming";
+    timer_id_ = conn_->GetLoop()->RunAfter([this]() {
+      conn_->ShutdownWrite();
+    }, 10);
+  }
+  else {
+    LOG_DEBUG << "Non-Keep-Alive(Close) Connection will be closed at immediately";
+    conn_->ShutdownWrite();
+  }
+}
+
+void HttpSession::SendErrorResponse()
+{
+  LOG_TRACE << "Error occurred, send error page to client";
+  conn_->Send(GetClientError(
+    meta_error_.first, meta_error_.second).GetBuffer());
+  conn_->ShutdownWrite();
+}
+
+void HttpSession::NotImplementation()
+{
+  LOG_TRACE << "The service of " << GetMethodString(method_) << " is not implemetation";
+
+  conn_->Send(GetClientError(
+    HttpStatusCode::k501NotImplemeted,
+    "The service is not implemeted").GetBuffer());
+  conn_->ShutdownWrite();
 }
 
 auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
@@ -57,6 +302,7 @@ auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
   ParseResult ret;
 
   if (parse_phase_ == kFinished) {
+    LOG_TRACE << "The parse state is reset";
     Reset();
   }
 
@@ -69,12 +315,15 @@ auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
 
     switch (parse_phase_) {
       case kHeaderLine:
+        LOG_TRACE << "Start parsing the header line";
+
         ret = ParseHeaderLine(line);
         if (ret == kGood) {
           parse_phase_ = kHeaderFields;
         }
         break;
       case kHeaderFields:
+        LOG_TRACE << "Start parsing headers fields";
         ret = ParseHeaderField(line);
 
         if (ret == kGood) {
@@ -92,6 +341,7 @@ auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
       return kError;
     }
     else if (parse_phase_ == kFinished) {
+      LOG_TRACE << "The http request has been parsed";
       return kGood;
     }
   }
@@ -115,11 +365,11 @@ auto HttpSession::ParseHeaderLine(kanon::StringView line) -> ParseResult
     // Not a valid method
     FillMetaError(
       HttpStatusCode::k405MethodNotAllowd, 
-      "The method is not supported(Check all if is uppercase)");
+      "The method is not supported(Check letters if are uppercase all)");
     return kError;
   }
 
-  LOG_DEBUG << "Method pass: " << GetMethodString(method_);
+  LOG_DEBUG << "Method = " << GetMethodString(method_);
 
   line.remove_prefix(space_pos+1);
 
@@ -140,7 +390,7 @@ auto HttpSession::ParseHeaderLine(kanon::StringView line) -> ParseResult
     return kError;
   }
 
-  LOG_DEBUG << "The URL: " << url;
+  LOG_DEBUG << "The URL = " << url;
 
   const auto url_size = url.size();
   url_ = url.ToString();
@@ -284,7 +534,7 @@ auto HttpSession::ParseComplexUrl() -> ParseResult
 
   unsigned char decode_persent = 0; // Hexadecimal digit * 2 after %, i.e. % Hex Hex
 
-  LOG_TRACE << "Start parse the complex URL";
+  LOG_TRACE << "Start parsing the complex URL";
 
   for (auto c : url_) {
     switch (state) {
@@ -435,6 +685,9 @@ auto HttpSession::ParseHeaderField(StringView header) -> ParseResult
     FillMetaErrorOfBadRequest("The : of header isn't provided");
     return kError;
   }
+  
+  LOG_DEBUG << "Header field: [" << header.substr(0, colon_pos) << 
+    ": " << header.substr(colon_pos+2) << "]";
 
   headers_.emplace(
     header.substr(0, colon_pos).ToString(), 

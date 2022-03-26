@@ -5,8 +5,9 @@
 
 namespace http {
 
-typedef std::unordered_map<std::string, std::string> HeaderMap;
-typedef HeaderMap::value_type HeaderType;
+using HeaderMap = std::unordered_map<std::string, std::string>;
+using HeaderType = HeaderMap::value_type;
+using ArgsMap = std::unordered_map<std::string, std::string>;
 
 } // namespace http
 

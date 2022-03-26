@@ -2,8 +2,8 @@
 #include "kanon/util/macro.h"
 #include "kanon/util/mem.h"
 
-IMPORT_NAMESPACE(kanon);
-IMPORT_NAMESPACE(std);
+using namespace kanon;
+using namespace std;
 
 namespace http {
 
