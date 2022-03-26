@@ -10,8 +10,7 @@ using CreateFunc = PluginDemoBase*(*)();
 
 int main()
 {
-  void* handle = dlopen("./libdemo", RTLD_LAZY);
-
+  void* handle = dlopen("./demo", RTLD_LAZY);
   auto create_func = reinterpret_cast<CreateFunc>(dlsym(handle, "CreateObject"));
 
   std::unique_ptr<PluginDemoBase> p(create_func());

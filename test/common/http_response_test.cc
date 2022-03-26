@@ -1,9 +1,9 @@
-#include "http/http_response.h"
+#include "common/http_response.h"
 
 #include <iostream>
 #include <kanon/log/logger.h>
 
-IMPORT_NAMESPACE( http );
+using namespace http;
 
 int main() {
   auto response = GetClientError(HttpStatusCode::k400BadRequest, "Bad Request");

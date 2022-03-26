@@ -1,7 +1,0 @@
-# This is config file of kanon_http_server
-
-HomePagePath: /root/kanon_http/html
-HomePage: index.html
-Host: 47.99.92.230
-
-# Also, you can set more setting in future...
