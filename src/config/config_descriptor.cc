@@ -2,6 +2,7 @@
 
 #include <kanon/log/logger.h>
 #include <kanon/string/string_view.h>
+#include <kanon/util/optional.h>
 
 using namespace kanon;
 using namespace http;
@@ -27,7 +28,6 @@ void ConfigDescriptor::Read()
   line.reserve(4096);
 
   while (file_.ReadLine(line, false)) {
-    LOG_DEBUG << "config line: " << line;
     auto colon_pos = line.find(':');
     auto comment_pos = line.find('#');
 
@@ -40,10 +40,10 @@ void ConfigDescriptor::Read()
       auto space_pos = line.find(' ', colon_pos+2);
 
       if (space_pos != std::string::npos) {
-        fields_.emplace(line.substr(0, colon_pos), line.substr(colon_pos+2, space_pos));
+        paras_.emplace(line.substr(0, colon_pos), line.substr(colon_pos+2, space_pos));
       }
       else {
-        fields_.emplace(line.substr(0, colon_pos), line.substr(colon_pos+2));
+        paras_.emplace(line.substr(0, colon_pos), line.substr(colon_pos+2));
       }
     }
   }
@@ -53,15 +53,16 @@ void ConfigDescriptor::Read()
   }
 }
 
-kanon::StringView ConfigDescriptor::GetField(std::string const& key)
+kanon::optional<std::string> 
+ConfigDescriptor::GetParameter(std::string const& key)
 {
-  auto iter = fields_.find(key);
+  auto iter = paras_.find(key);
 
-  if (iter == std::end(fields_)) {
-    return MakeStringView("");
+  if (iter == std::end(paras_)) {
+    return kanon::make_null_optional<std::string>();
   }
 
-  return iter->second;
+  return kanon::make_optional(std::move(iter->second));
 }
 
 } // namespace config
