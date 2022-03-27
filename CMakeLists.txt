@@ -3,13 +3,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 project(kanon_http)
 
+if (NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE "Release")
+endif ()
+
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og")
 
 set(CXX_FLAGS 
- -g
  -Wall
  -Wextra
  -Wno-return-local-addr
@@ -44,24 +47,32 @@ message(STATUS "BUILD_TYPE: ${CAMKE_BUILD_TYPE}")
 
 include_directories(${PROJECT_SOURCE_DIR}/src)
 
-# FIXME use macro
-function (GenLib lib)
-	add_library(${lib} ${ARGN})
+# I don't want to use the builtin variable ${BUILD_SHARED_LIBS}
+# since it you don't set it to ON explicitly, then the NOT 
+# ${BUILD_SHARED_LIBS} will be false, and generated libraries 
+# are static. That's not I wanted behavior. I want a variable,
+# it can build shared libraries default even though I don't set 
+# it explitly, and the build of static libraries is an option.
+set(BUILD_STATIC_LIBS OFF CACHE BOOL "Build static libraries")
 
-	if (NOT ${BUILD_SHARED_LIBS})
+macro (GenLib lib)
+	#if (Not ${BUILD_SHARED_LIBS})
+	if (${BUILD_STATIC_LIBS})
 		message(STATUS "Build static library: ${lib}")
+		add_library(${lib} STATIC ${ARGN})
 		set_target_properties(${lib}
 			PROPERTIES
 			ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 		)
 	else ()
 		message(STATUS "Build shared library: ${lib}")
+		add_library(${lib} SHARED ${ARGN})
 		set_target_properties(${lib}
 			PROPERTIES
 			LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 		)
-	endif (NOT ${BUILD_SHARED_LIBS})
-endfunction ()
+	endif (${BUILD_STATIC_LIBS})
+endmacro ()
 
 
 
