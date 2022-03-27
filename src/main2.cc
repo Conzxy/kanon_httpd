@@ -21,7 +21,7 @@ int main(int argc, char* argv[])
       LOG_INFO << "The log files are stored in the " << options.log_dir << " directory";
 
       AsyncLogTrigger::instance(
-        "http_server2", 2 * 1024 * 1024, options.log_dir);
+        "httpd_kanon", 2 * 1024 * 1024, options.log_dir);
     }
 
     EventLoop loop;
