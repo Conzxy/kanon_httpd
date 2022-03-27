@@ -1,3 +1,4 @@
+#include <kanon/util/macro.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -36,11 +37,13 @@ int main()
       }
     }
     else if (::strcmp(method, "POST") == 0) {
-      auto len = ::atoll(::getenv("CONTENT_LENGTH"));
+      size_t len = ::atoll(::getenv("CONTENT_LENGTH"));
 
       std::string content;
       content.reserve(len);
-      ::fread(&content[0], 1, len, stdin);
+      size_t n = ::fread(&content[0], 1, len, stdin);
+      KANON_UNUSED(n);
+      assert(n == len);
 
       ::fwrite(content.data(), 1, len, stdout);
     }
