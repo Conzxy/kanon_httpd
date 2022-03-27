@@ -31,7 +31,7 @@ inline bool ParseCmdLine(
     ("threads,t", po::value<uint16_t>(&options.thread_num), "Threads number of IO thread instead of main thread(default: 0)")
     ("config,c", po::value<std::string>(&options.config_name), "Configuration file path(default: ./kanon_httpd.conf)")
     ("log,l", po::value<std::string>(&options.log_way), "How to log: terminal, file(default: terminal)")
-    ("log_dir,d", po::value<std::string>(&options.log_dir), "The directory where log file store");
+    ("log_dir,d", po::value<std::string>(&options.log_dir), "The directory where log file store(default: ${HOME}/.log)");
 
 
   po::variables_map vm;
