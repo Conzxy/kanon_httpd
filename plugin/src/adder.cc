@@ -1,4 +1,5 @@
 #include "common/http_response.h"
+#include "common/parse_args.h"
 #include "plugin/http_dynamic_response_interface.h"
 
 using namespace http;
@@ -43,7 +44,9 @@ class Adder : public HttpDynamicResponseInterface {
 
   HttpResponse GenResponseForPost(const std::string &body) override
   {
-    return HttpResponse();
+    auto args = ParseArgs(body);
+
+    return GenResponseForGet(args);    
   }
 };
 
