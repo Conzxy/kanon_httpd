@@ -10,10 +10,10 @@
 #include <kanon/util/macro.h>
 #include <kanon/util/ptr.h>
 
-
 #include "common/http_response.h"
-#include "config/http_config.h"
 #include "common/http_constant.h"
+#include "common/parse_args.h"
+#include "config/http_config.h"
 #include "plugin/plugin_loader.h"
 #include "plugin/http_dynamic_response_interface.h"
 #include "unix/fd_wrapper.h"
@@ -36,7 +36,10 @@ HttpSession::HttpSession()
   , is_complex_(false)
   , method_(HttpMethod::kNotSupport)
   , version_(HttpVersion::kNotSupport)
-  , timer_id_()
+  , keep_alive_timer_id_()
+  , connection_timer_id_()
+  , is_keep_alive_(false)
+  , content_length_(-1)
   , id_(counter_.GetAndAdd(1))
 {
 }
@@ -45,7 +48,12 @@ HttpSession::HttpSession(HttpServer& server, TcpConnectionPtr const& conn)
   : HttpSession()
 {
   server_ = &server;
-  conn_ = kanon::GetPointer(conn);
+  conn_ = conn;
+
+  LOG_DEBUG << "This new established connection will be closed after 60s if no message coming";
+  connection_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
+    conn_->ShutdownWrite();
+  }, 60);
 
   conn_->SetMessageCallback(std::bind(
     &HttpSession::OnMessage, this, kanon::_1, kanon::_2, kanon::_3));
@@ -53,6 +61,8 @@ HttpSession::HttpSession(HttpServer& server, TcpConnectionPtr const& conn)
 
 HttpSession::~HttpSession() noexcept
 {
+  CancelKeepAliveTimer(); 
+  CancelConnectionTimeoutTimer();
 }
 
 void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv_time)
@@ -61,19 +71,11 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
   KANON_UNUSED(recv_time);
   // FIXME Implementation timeout disconnection
 
-  if (server_->timer_id_) {
-    conn->GetLoop()->CancelTimer(*server_->timer_id_);
-    server_->timer_id_.SetInvalid();
+  LOG_DEBUG << "The HTTP REQUEST CONTENTS: ";
+  LOG_DEBUG << buffer.ToStringView();
 
-    LOG_DEBUG << "The connection-timeout timer is reset";
-  }
-
-  if (timer_id_) {
-    conn->GetLoop()->CancelTimer(*timer_id_);
-    timer_id_.SetInvalid();
-
-    LOG_DEBUG << "The keep-alive timer is reset";
-  }
+  CancelConnectionTimeoutTimer();
+  CancelKeepAliveTimer();
 
   ParseResult ret;
   if ( ( ret = Parse(buffer) ) == kGood) {
@@ -82,12 +84,6 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
     }
     url_.insert(0, g_config.root_path.data(), g_config.root_path.size());
     LOG_DEBUG << "content_path = " << url_;
-
-    auto iter = headers_.find("Connection");
-    if (iter != std::end(headers_) && 
-        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size())) {
-      is_keep_alive_ = true;
-    }
 
     switch (method_) {
       case HttpMethod::kGet:
@@ -181,10 +177,9 @@ void HttpSession::SendFile(int fd)
     server_->EraseOffset(this);
 
     conn_->SetWriteCompleteCallback(WriteCompleteCallback());
-
+    CloseConnection();
   }
 
-  CloseConnection();
 }
 
 void HttpSession::ServeDynamicContent()
@@ -207,69 +202,40 @@ void HttpSession::ServeDynamicContent()
 
   std::unique_ptr<HttpDynamicResponseInterface> response(create_func());
 
+  HttpResponse first(true);
+  first.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11);
+  
+  if (is_keep_alive_) {
+    first.AddHeader("Connection", "Keep-Alive");
+  }
+
+  conn_->Send(first.GetBuffer());
+
+  // The Content-Length is set by plugin
   if (method_ == HttpMethod::kPost) {
-    NotImplementation();
+    conn_->Send(response->GenResponseForPost(body_).GetBuffer());
   }
   else if (method_ == HttpMethod::kGet) {
-    // The Content-Length is set by plugin
-    HttpResponse first(true);
-    first.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11);
-    
-    if (is_keep_alive_) {
-      first.AddHeader("Connection", "Keep-Alive");
-    }
-  
-    conn_->Send(first.GetBuffer());
     conn_->Send(response->GenResponseForGet(SplitArgs()).GetBuffer());
   }
 
   CloseConnection();
 }
 
+
 ArgsMap HttpSession::SplitArgs()
 {
-  StringView::size_type equal_pos = StringView::npos;
-  StringView::size_type and_pos = StringView::npos;
-  std::string key;
-  std::string val;
-
-  ArgsMap kvs;
-
-  StringView query = query_;
-
-  LOG_TRACE << "Start parsing the query args...";
-
-  for (;;) {
-    equal_pos = query.find('=');
-    and_pos = query.find('&');
-
-    // and_pos == npos is also ok
-    kvs.emplace(
-      query.substr_range(0, equal_pos).ToString(),
-      query.substr_range(equal_pos+1, and_pos).ToString());
-
-    if (and_pos == StringView::npos) break;
-
-    query.remove_prefix(and_pos+1);
-  }
-
-  LOG_TRACE << "The query args have been parsed";
-
-  LOG_DEBUG << "The query args map is following: ";
-
-  for (auto const& kv : kvs) {
-    LOG_DEBUG << "[" << kv.first << ": " << kv.second << "]";
-  }
-
-  return kvs;
+  return ParseArgs(query_);
 }
 
 void HttpSession::CloseConnection()
 {
   if (is_keep_alive_) {
     LOG_DEBUG << "Keep-Alive connection will keep 10s if no new message coming";
-    timer_id_ = conn_->GetLoop()->RunAfter([this]() {
-      conn_->ShutdownWrite();
+    keep_alive_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
+      if (conn_) {
+        conn_->ShutdownWrite();
+      }
     }, 10);
   }
   else {
@@ -281,8 +247,14 @@ void HttpSession::CloseConnection()
 void HttpSession::SendErrorResponse()
 {
   LOG_TRACE << "Error occurred, send error page to client";
+  LOG_DEBUG << "Error: (" << GetStatusCode(meta_error_.first)
+    << ", " << GetStatusCodeString(meta_error_.first)
+    << ", " << meta_error_.second << ")";
+
   conn_->Send(GetClientError(
     meta_error_.first, meta_error_.second).GetBuffer());
+
+  CancelKeepAliveTimer();
   conn_->ShutdownWrite();
 }
 
@@ -298,8 +270,7 @@ void HttpSession::NotImplementation()
 
 auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
 {
-  StringView line;
-  ParseResult ret;
+  ParseResult ret = kShort;
 
   if (parse_phase_ == kFinished) {
     LOG_TRACE << "The parse state is reset";
@@ -307,40 +278,63 @@ auto HttpSession::Parse(kanon::Buffer& buffer) -> ParseResult
   }
 
   while (parse_phase_ < kFinished) {
-    const bool has_line = buffer.FindCrLf(line);
+    if (parse_phase_ < kBody) {
+      assert(parse_phase_ == kHeaderFields || parse_phase_ == kHeaderLine);
 
-    if (!has_line) {
-      break;
-    }
+      StringView line;
 
-    switch (parse_phase_) {
-      case kHeaderLine:
+      const bool has_line = buffer.FindCrLf(line);
+
+      if (!has_line) {
+        break;
+      }
+
+      if (parse_phase_ == kHeaderLine) {
         LOG_TRACE << "Start parsing the header line";
 
         ret = ParseHeaderLine(line);
         if (ret == kGood) {
+          buffer.AdvanceRead(line.size()+2);
           parse_phase_ = kHeaderFields;
         }
-        break;
-      case kHeaderFields:
+
+        assert(ret != kShort);
+      }
+      else if (parse_phase_ == kHeaderFields) {
         LOG_TRACE << "Start parsing headers fields";
         ret = ParseHeaderField(line);
 
         if (ret == kGood) {
-          parse_phase_ = kFinished;
+          parse_phase_ = kBody;
         }
 
-        break;
-      case kFinished:
-        break;
+        if (ret != kError) {
+          buffer.AdvanceRead(line.size()+2);
+        }
+      }
     }
+    else {
+      assert(parse_phase_ == kBody);
+      SetHeaderMetadata();
 
-    buffer.AdvanceRead(line.size()+2);
+      if (content_length_ != static_cast<uint64_t>(-1)) {
+        LOG_TRACE << "Start extracting the body";
+        ret = ExtractBody(buffer);
+
+        if (ret == kGood) {
+          parse_phase_ = kFinished;
+        }
+      }
+      else {
+        parse_phase_ = kFinished;
+      }
+    }
 
     if (ret == kError) {
       return kError;
     }
-    else if (parse_phase_ == kFinished) {
+
+    if (parse_phase_ == kFinished) {
       LOG_TRACE << "The http request has been parsed";
       return kGood;
     }
@@ -367,6 +361,10 @@ auto HttpSession::ParseHeaderLine(kanon::StringView line) -> ParseResult
       HttpStatusCode::k405MethodNotAllowd, 
       "The method is not supported(Check letters if are uppercase all)");
     return kError;
+  }
+
+  if (method_ == HttpMethod::kPost) {
+    is_static_ = false;
   }
 
   LOG_DEBUG << "Method = " << GetMethodString(method_);
@@ -467,7 +465,7 @@ auto HttpSession::ParseHeaderLine(kanon::StringView line) -> ParseResult
     return kError;
   }
 
-  if (!is_static_) {
+  if (is_complex_) {
     ParseComplexUrl();
   }
 
@@ -696,6 +694,20 @@ auto HttpSession::ParseHeaderField(StringView header) -> ParseResult
   return kShort;
 }
 
+auto HttpSession::ExtractBody(Buffer& buffer) -> ParseResult
+{
+  if (buffer.GetReadableSize() >= content_length_) {
+    LOG_DEBUG << "Buffer readable size = " << buffer.GetReadableSize();
+    body_ = buffer.RetrieveAsString(content_length_);
+    LOG_DEBUG << "HTTP REQUEST BODY: ";
+    LOG_DEBUG << body_;
+
+    return kGood;
+  }
+
+  return kShort;
+}
+
 void HttpSession::ParseVersionCode(int version_code) noexcept
 {
   switch (version_code) {
@@ -713,14 +725,65 @@ void HttpSession::ParseVersionCode(int version_code) noexcept
 void HttpSession::Reset()
 {
   parse_phase_ = kHeaderLine;
+  // No need to reset meta_error_
   is_static_   = true;
   is_complex_  = false;
   method_      = HttpMethod::kNotSupport;
   version_     = HttpVersion::kNotSupport;
+
+  is_keep_alive_ = false;
+  content_length_ = -1;
   headers_.clear();
+
+
+  CancelConnectionTimeoutTimer();
+  CancelKeepAliveTimer();
   // No need to reset the url_ and query_
   // we can overwrite it and reuse the heap 
   // has allocated
 }
 
+uint64_t HttpSession::Str2U64(std::string const& str)
+{
+  return ::strtoull(str.c_str(), NULL, 10);
+}
+
+void HttpSession::SetHeaderMetadata()
+{
+    auto iter = headers_.find("Connection");
+    if (iter != std::end(headers_) && 
+        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size())) {
+      is_keep_alive_ = true;
+      LOG_DEBUG << "The connection is keep-alive";
+    }
+    else {
+      LOG_DEBUG << "The connection is close";
+    }
+
+    iter = headers_.find("Content-Length");
+
+    if (iter != std::end(headers_)) {
+      content_length_ = Str2U64(iter->second);
+      LOG_DEBUG << "The Content-Length = " << content_length_;
+    }
+}
+
+void HttpSession::CancelKeepAliveTimer()
+{
+  if (keep_alive_timer_id_) {
+    conn_->GetLoop()->CancelTimer(*keep_alive_timer_id_);
+    keep_alive_timer_id_.SetInvalid();
+    LOG_DEBUG << "The keep-alive timer is canceled";
+  }
+}
+
+void HttpSession::CancelConnectionTimeoutTimer()
+{
+  if (connection_timer_id_) {
+    conn_->GetLoop()->CancelTimer(*connection_timer_id_);
+    connection_timer_id_.SetInvalid();
+
+    LOG_DEBUG << "The connection-timeout timer is canceled";
+  }
+}
 } // namespace http

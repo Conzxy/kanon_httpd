@@ -1,6 +1,8 @@
 #ifndef KANON_HTTP_SESSION_H
 #define KANON_HTTP_SESSION_H
 
+#include <kanon/net/buffer.h>
+#include <kanon/net/callback.h>
 #include <kanon/util/noncopyable.h>
 #include <kanon/util/optional.h>
 #include <kanon/net/user_server.h>
@@ -23,6 +25,7 @@ private:
   enum ParsePhase {
     kHeaderLine = 0,
     kHeaderFields,
+    kBody,
     kFinished,
   };
 
@@ -66,37 +69,88 @@ private:
   ParseResult ParseHeaderLine(kanon::StringView header_line);
   ParseResult ParseComplexUrl();
   ParseResult ParseHeaderField(kanon::StringView header);
+  ParseResult ExtractBody(kanon::Buffer& buffer);
   void ParseMethod(kanon::StringView method) noexcept;
   void ParseVersionCode(int version_code) noexcept;
   void Reset();
+  void SetHeaderMetadata();
+
+  uint64_t Str2U64(std::string const& str);
 
   // Error handling
   template<size_t N>
   void FillMetaError(HttpStatusCode code, char const (&msg)[N]);
-
   template<size_t N>
   void FillMetaErrorOfBadRequest(char const (&msg)[N])
   { FillMetaError(HttpStatusCode::k400BadRequest, msg); }
-
   void SendErrorResponse();
 
-  HttpServer* server_;
-  kanon::TcpConnection* conn_;
+  // Timer control
+  void CancelConnectionTimeoutTimer();
+  void CancelKeepAliveTimer();
 
+  // Data
+  /**
+   * To access the data structure maintained by server
+   */
+  HttpServer* server_;
+
+  /**
+   * A session in fact is a connection
+   * To simplify the function parameter
+   */
+  TcpConnectionPtr conn_;
+
+  /**
+   * Main state machine metadata
+   */
   ParsePhase parse_phase_;
+
+  /**
+   * Error metadata, used to construct error response
+   */
   MetaError meta_error_;
 
-  bool is_static_;
-  bool is_complex_;
-  std::string url_;
+  /**
+   * The metadata for parsing header line of a http request
+   */
+  bool is_static_; /** Static page */
+  bool is_complex_; /** Complex URL, e.g. %Hex Hex */
+  std::string url_; /** The URL part */
+  std::string query_; /** query string */
+  HttpMethod method_; /** method of header line */
+  HttpVersion version_; /** version code of header line */
+
+  /**
+   * Store the header fields
+   */
   HeaderMap headers_;
-  std::string query_;
 
-  HttpMethod method_; 
-  HttpVersion version_;
-  bool is_keep_alive_;
+  /**
+   * Store the body of a http request
+   */
+  std::string body_;
 
-  kanon::optional<kanon::TimerId> timer_id_;
+  /** 
+   * To support long connection to reuse this connection,
+   * set a timer, it will close this connection if 
+   * peer don't send any message in 10s.
+   */
+  kanon::optional<kanon::TimerId> keep_alive_timer_id_;
+
+  /** 
+   * If a new connection is established and don't send any
+   * message in 60s,  just close it.
+   */
+  kanon::optional<kanon::TimerId> connection_timer_id_;
+
+  bool is_keep_alive_; /** Determine if a keep-alive connection */
+
+  /**
+   * Due to short read, we should cache content length
+   * in case search the fields in headers_
+   */
+  uint64_t content_length_;
 
   // For debugging
   uint32_t id_;

@@ -21,7 +21,6 @@ private:
   void EraseOffset(HttpSession* session);
   kanon::optional<off_t> SearchOffset(HttpSession* session);
 
-  kanon::optional<kanon::TimerId> timer_id_;
   std::unordered_map<HttpSession*, off_t> offset_map_;
 };
 

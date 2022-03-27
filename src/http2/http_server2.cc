@@ -1,6 +1,7 @@
 #include "http_server2.h"
 
 #include <kanon/util/any.h>
+#include <kanon/util/macro.h>
 #include <kanon/util/optional.h>
 
 #include "http_session.h"
@@ -14,13 +15,6 @@ HttpServer::HttpServer(EventLoop* loop, InetAddr const& addr)
     HttpSession* session = nullptr;
 
     if (conn->IsConnected()) {
-      LOG_DEBUG << "This new established connection will be closed after 60s if no message coming";
-
-      const auto ptr = GetPointer(conn);
-      timer_id_ = kanon::make_optional(conn->GetLoop()->RunAfter([ptr]() {
-        ptr->ShutdownWrite();
-      }, 60));
-
       session = new HttpSession(*this, conn);
       LOG_TRACE << "[Session #" << session->GetId() << "] constructed";
       conn->SetContext(session);
@@ -40,14 +34,14 @@ HttpServer::~HttpServer() noexcept
 
 void HttpServer::EmplaceOffset(HttpSession* session, off_t off)
 {
-  auto success = offset_map_.emplace(session, off);
+  auto success = offset_map_.emplace(session, off);KANON_UNUSED(success);
 
   KANON_ASSERT(success.second, "Session has been emplaced?");
 }
 
 void HttpServer::EraseOffset(HttpSession* session)
 {
-  auto n = offset_map_.erase(session);
+  auto n = offset_map_.erase(session);KANON_UNUSED(n);
 
   KANON_ASSERT(n == 1, "The <session, offset> must be erased only once");
 }
