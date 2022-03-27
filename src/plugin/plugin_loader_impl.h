@@ -39,7 +39,9 @@ PluginLoader<T>::PluginLoader(std::string const& plugin_name)
 template<typename T>
 PluginLoader<T>::~PluginLoader() noexcept
 {
-  ::dlclose(handle_); 
+  if (handle_) {
+    ::dlclose(handle_); 
+  }
 }
 
 template<typename T>
