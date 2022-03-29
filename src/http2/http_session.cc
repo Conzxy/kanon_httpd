@@ -192,7 +192,8 @@ void HttpSession::ServeDynamicContent()
   auto error = loader.Open(url_);
 
   if (error) {
-    LOG_SYSERROR << "Failed to open shared object " << url_;
+    LOG_SYSERROR << "Failed to open shared object: " << url_;
+    LOG_SYSERROR << "Error Message: " << *error;
     FillMetaError(HttpStatusCode::k404NotFound, "The page is not found");
     SendErrorResponse();
     return ;
