@@ -55,7 +55,7 @@ private:
 
   // Static contents
   void ServeFile();
-  void SendFile(int fd);
+  bool SendFile(int fd);
 
   // Dynamic contents
   void ServeDynamicContent();

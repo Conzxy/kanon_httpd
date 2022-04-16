@@ -63,6 +63,8 @@ HttpSession::~HttpSession() noexcept
 {
   CancelKeepAliveTimer(); 
   CancelConnectionTimeoutTimer();
+
+  server_->EraseOffset(this);
 }
 
 void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv_time)
@@ -111,9 +113,9 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
 
 void HttpSession::ServeFile()
 {
-  const int fd = ::open(url_.c_str(), O_RDONLY);
+  auto fd = server_->GetFd(url_);
 
-  if (fd < 0) {
+  if (!fd) {
     if (errno == ENOENT) {
       FillMetaError(
         HttpStatusCode::k404NotFound, 
@@ -133,8 +135,8 @@ void HttpSession::ServeFile()
 
   HttpResponse response(true);
 
-  off_t file_size = ::lseek(fd, 0, SEEK_END);
-  ::lseek(fd, 0, SEEK_SET);
+  off_t file_size = ::lseek(*fd, 0, SEEK_END);
+  ::lseek(*fd, 0, SEEK_SET);
 
   LOG_DEBUG << "file_size = " << file_size;
 
@@ -150,15 +152,16 @@ void HttpSession::ServeFile()
   server_->EmplaceOffset(this, 0);
 
   conn_->SetWriteCompleteCallback([fd, this](TcpConnectionPtr const& conn) {
-    SendFile(fd);
+    return SendFile(*fd);
   });
 
   LOG_DEBUG << "response: " << response.GetBuffer().ToStringView();
   conn_->Send(response.GetBuffer());
-  
+
+  LOG_TRACE << "Sending file...";
 }
 
-void HttpSession::SendFile(int fd)
+bool HttpSession::SendFile(int fd)
 {
   char buf[kFileBufferSize_];
 
@@ -167,17 +170,17 @@ void HttpSession::SendFile(int fd)
   auto readn = ::pread(fd, buf, sizeof buf, *off);
 
   if (readn != 0) {
-    LOG_TRACE << "Sending file...";
     server_->offset_map_[this] += readn;
     conn_->Send(buf, readn);
+    return false;
   }
   else {
     LOG_TRACE << "File has been sent";
-    FDWrapper wrapper(fd);
     server_->EraseOffset(this);
 
     conn_->SetWriteCompleteCallback(WriteCompleteCallback());
     CloseConnection();
+    return true;
   }
 
 }
@@ -752,8 +755,9 @@ uint64_t HttpSession::Str2U64(std::string const& str)
 void HttpSession::SetHeaderMetadata()
 {
     auto iter = headers_.find("Connection");
-    if (iter != std::end(headers_) && 
-        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size())) {
+    if ((iter != std::end(headers_) && 
+        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size() ) ) ||
+        HttpVersion::kHttp11 == version_) {
       is_keep_alive_ = true;
       LOG_DEBUG << "The connection is keep-alive";
     }
