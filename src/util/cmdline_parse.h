@@ -17,7 +17,7 @@ inline bool ParseCmdLine(
   po::options_description od("Allowed options");
 
   options.port = 80;
-  options.config_name = "./kanon_httpd.conf";
+  options.config_name = "./.kanon_httpd.conf";
   options.thread_num = 0;
   options.log_way = "terminal";
 
@@ -29,7 +29,7 @@ inline bool ParseCmdLine(
     ("help,h", "help about kanon httpd")
     ("port,p", po::value<uint16_t>(&options.port), "Tcp port number of httpd(default: 80)")
     ("threads,t", po::value<uint16_t>(&options.thread_num), "Threads number of IO thread instead of main thread(default: 0)")
-    ("config,c", po::value<std::string>(&options.config_name), "Configuration file path(default: ./kanon_httpd.conf)")
+    ("config,c", po::value<std::string>(&options.config_name), "Configuration file path(default: ./.kanon_httpd.conf)")
     ("log,l", po::value<std::string>(&options.log_way), "How to log: terminal, file(default: terminal)")
     ("log_dir,d", po::value<std::string>(&options.log_dir), "The directory where log file store(default: ${HOME}/.log)");
 
