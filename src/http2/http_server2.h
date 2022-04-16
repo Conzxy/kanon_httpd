@@ -21,6 +21,12 @@ private:
   void EraseOffset(HttpSession* session);
   kanon::optional<off_t> SearchOffset(HttpSession* session);
 
+  // Cache factory method
+  // @see Modern Effective C++ Item 21
+  std::shared_ptr<int> GetFd(std::string const& path);
+
+  kanon::MutexLock mutex_;
+  std::unordered_map<std::string, std::weak_ptr<int>> fd_map_;
   std::unordered_map<HttpSession*, off_t> offset_map_;
 };
 
