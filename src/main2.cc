@@ -1,7 +1,6 @@
 #include "http2/http_server2.h"
 
-#include <kanon/log/async_log_trigger.h>
-
+#include "kanon/log/async_log.h"
 #include "util/cmdline_parse.h"
 #include "config/http_options.h"
 #include "config/http_config.h"
@@ -20,8 +19,7 @@ int main(int argc, char* argv[])
     if (options.log_way == "file") {
       LOG_INFO << "The log files are stored in the " << options.log_dir << " directory";
 
-      AsyncLogTrigger::instance(
-        "httpd_kanon", 2 * 1024 * 1024, options.log_dir);
+      SetupAsyncLog("httpd_kanon", 2 * 1024 * 1024, options.log_dir);
     }
 
     EventLoop loop;
