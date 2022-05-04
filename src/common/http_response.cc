@@ -45,6 +45,23 @@ HttpResponse GetClientError(
     .AddBody("</div>")
     .AddBody("</body>")
     .AddBody("</html>\r\n");
+}
+
+char const* HttpResponse::GetFileType(StringView filename) {
+  if (filename.ends_with(".pdf")) {
+    return "application/pdf";
+  } else if (filename.ends_with(".png")) {
+    return "image/png";
+  } else if (filename.ends_with(".jpg")) {
+    return "image/jpg";
+  } else if (filename.ends_with(".gif")) {
+    return "image/gif";
+  } else if (filename.ends_with(".html")) {
+    return "text/html";
+  } else {
+    return "text/plain";
+  }
 
 }
+
 } // namespace http

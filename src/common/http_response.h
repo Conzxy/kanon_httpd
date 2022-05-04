@@ -92,9 +92,12 @@ public:
   Self& AddBody(char(&buf)[N], kanon::StringArg fmt, Args... args) {
     return AddBody(buf, N, fmt, args...);
   }
-  
+
+  Self& AddContentType(kanon::StringView filename) {
+    return AddHeader("Content-Type", GetFileType(filename));
+  }
+
   kanon::Buffer& GetBuffer();
-  
 private:
   /**
    * Add version code in response line.
@@ -119,6 +122,8 @@ private:
     buffer_.Append(static_cast<char const*>(buf));
     return *this;
   }
+
+  static char const* GetFileType(kanon::StringView filename);
 
   kanon::Buffer buffer_;
   kanon::Buffer body_;
