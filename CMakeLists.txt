@@ -25,7 +25,7 @@ set(CXX_FLAGS
  #-Wshadow
  -Wwrite-strings # in fact, this is default specified
  #cxx standard 
- -std=c++11
+ -std=c++14
  -pthread
 	
  # linker opt
@@ -73,8 +73,6 @@ macro (GenLib lib)
 		)
 	endif (${BUILD_STATIC_LIBS})
 endmacro ()
-
-
 
 add_subdirectory(src)
 add_subdirectory(test)
