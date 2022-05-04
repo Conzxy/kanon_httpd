@@ -20,7 +20,9 @@ namespace http {
 
 class HttpServer;
 
-class HttpSession : kanon::noncopyable {
+class HttpSession : 
+  public std::enable_shared_from_this<HttpSession>,
+  kanon::noncopyable {
 private:
   enum ParsePhase {
     kHeaderLine = 0,
@@ -48,6 +50,7 @@ public:
   uint32_t GetId() const noexcept
   { return id_; }
 
+  void Setup();
 private:
   using MetaError = std::pair<HttpStatusCode, kanon::StringView>;
 
@@ -151,7 +154,9 @@ private:
    * in case search the fields in headers_
    */
   uint64_t content_length_;
-
+  
+  uint64_t cur_filesize_ = 0; 
+  uint64_t cache_filesize_ = 0;
   // For debugging
   uint32_t id_;
   static kanon::AtomicCounter32 counter_;

@@ -1,9 +1,11 @@
 #ifndef KANON_HTTP_SERVER2_H
 #define KANON_HTTP_SERVER2_H
 
+#include <sys/types.h>
 #include <unordered_map>
 
 #include <kanon/net/user_server.h>
+#include <kanon/thread/rw_lock.h>
 #include <kanon/util/optional.h>
 
 namespace http {
@@ -17,9 +19,9 @@ public:
 
   ~HttpServer() noexcept;
 private:
-  void EmplaceOffset(HttpSession* session, off_t off);
-  void EraseOffset(HttpSession* session);
-  kanon::optional<off_t> SearchOffset(HttpSession* session);
+  void EmplaceOffset(uint64_t session, off_t off);
+  void EraseOffset(uint64_t session);
+  kanon::optional<off_t> SearchOffset(uint64_t session);
 
   // Cache factory method
   // @see Modern Effective C++ Item 21
@@ -27,7 +29,9 @@ private:
 
   kanon::MutexLock mutex_;
   std::unordered_map<std::string, std::weak_ptr<int>> fd_map_;
-  std::unordered_map<HttpSession*, off_t> offset_map_;
+
+  kanon::RWLock lock_offset_;
+  std::unordered_map<uint64_t, off_t> offset_map_;
 };
 
 } // namespace http

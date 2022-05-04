@@ -17,42 +17,48 @@ HttpServer::HttpServer(EventLoop* loop, InetAddr const& addr)
   : TcpServer(loop, addr, "HttpServer")
 {
   SetConnectionCallback([this](TcpConnectionPtr const& conn) {
-    HttpSession* session = nullptr;
 
     if (conn->IsConnected()) {
-      session = new HttpSession(*this, conn);
-      LOG_TRACE << "[Session #" << session->GetId() << "] constructed";
-      conn->SetContext(session);
+      auto session = std::make_shared<HttpSession>(*this, conn);
+      session->Setup();
+      LOG_DEBUG << "[Session #" << session->GetId() << "] constructed";
+      conn->SetContext(std::move(session));
+      LOG_DEBUG << "Connection: " << conn.get() << "; Session: " << session.get();
     }
     else {
-      session = *kanon::AnyCast<HttpSession*>(conn->GetContext());
-      LOG_TRACE << "[Session #" << session->GetId() << "] destroyed";
-      delete session; 
+      auto session = *kanon::AnyCast<std::shared_ptr<HttpSession>>(conn->GetContext());
+      LOG_DEBUG << "[Session #" << session->GetId() << "] destroyed";
+      LOG_DEBUG << "Connection: " << conn.get() << "; Session: " << session.get();
+      session.reset();
     }
 
   });
+
+  LOG_DEBUG << "HttpServer " << this << " is created";
 }
 
 HttpServer::~HttpServer() noexcept
 {
+  LOG_FATAL << "HttpServer crash";
 }
 
-void HttpServer::EmplaceOffset(HttpSession* session, off_t off)
+void HttpServer::EmplaceOffset(uint64_t session, off_t off)
 {
+  WLockGuard guard(lock_offset_);
   auto success = offset_map_.emplace(session, off);KANON_UNUSED(success);
 
   KANON_ASSERT(success.second, "Session has been emplaced?");
 }
 
-void HttpServer::EraseOffset(HttpSession* session)
+void HttpServer::EraseOffset(uint64_t session)
 {
+  WLockGuard guard(lock_offset_);
   auto n = offset_map_.erase(session);KANON_UNUSED(n);
-
-  // KANON_ASSERT(n == 1, "The <session, offset> must be erased only once");
 }
 
-kanon::optional<off_t> HttpServer::SearchOffset(HttpSession* session)
+kanon::optional<off_t> HttpServer::SearchOffset(uint64_t session)
 {
+  RLockGuard guard(lock_offset_);
   auto iter = offset_map_.find(session);
 
   if (iter == std::end(offset_map_)) {
@@ -64,42 +70,39 @@ kanon::optional<off_t> HttpServer::SearchOffset(HttpSession* session)
 
 std::shared_ptr<int> HttpServer::GetFd(std::string const& path)
 {
-  decltype(fd_map_)::iterator iter;
-
   MutexGuard guard(mutex_);
-  iter = fd_map_.find(path);
+  
+  auto& wptr = fd_map_[path];
+  auto sp = wptr.lock();
 
-  std::shared_ptr<int> ret(nullptr);
-
-  if (iter != std::end(fd_map_)) {
-    ret = iter->second.lock();
-
-    assert(ret);
-  }
-  else {
+  if (!sp) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
       LOG_SYSERROR << "Failed to open " << path;
       return nullptr;
     }
 
-    ret = std::shared_ptr<int>(new int(fd), [path, this](int* p) {
-      {
+    sp.reset(new int(fd), [path, this](int* p) {
+      // p maybe nullptr
+      if (p) {
+        {
         MutexGuard guard(mutex_);
         auto iter = fd_map_.find(path);
-
-        assert(iter != std::end(fd_map_));
-        fd_map_.erase(iter);
+        
+        if (iter != fd_map_.end() && iter->second.expired()) {
+          fd_map_.erase(iter);
+        }
+        unix::FDWrapper wrapper(*p);
+        }
       }
 
-      unix::FDWrapper wrapper(*p);
       delete p;
     });
 
-    fd_map_.emplace(path, ret);
+    wptr = sp;
   }
-
-  return ret;
+  
+  return sp;
 }
 
 } // namespace http

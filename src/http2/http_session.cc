@@ -1,5 +1,6 @@
 #include "http_session.h"
 
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -17,6 +18,7 @@
 #include "plugin/plugin_loader.h"
 #include "plugin/http_dynamic_response_interface.h"
 #include "unix/fd_wrapper.h"
+#include "unix/stat.h"
 
 #include "http_server2.h"
 
@@ -48,15 +50,20 @@ HttpSession::HttpSession(HttpServer& server, TcpConnectionPtr const& conn)
   : HttpSession()
 {
   server_ = &server;
+  LOG_DEBUG << "Binded server is " << server_;
+
   conn_ = conn;
 
+}
+
+void HttpSession::Setup() {
   LOG_DEBUG << "This new established connection will be closed after 60s if no message coming";
-  connection_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
-    conn_->ShutdownWrite();
+  connection_timer_id_ = conn_->GetLoop()->RunAfter([session = shared_from_this()]() {
+    session->conn_->ShutdownWrite();
   }, 60);
 
   conn_->SetMessageCallback(std::bind(
-    &HttpSession::OnMessage, this, kanon::_1, kanon::_2, kanon::_3));
+    &HttpSession::OnMessage, shared_from_this(), kanon::_1, kanon::_2, kanon::_3));
 }
 
 HttpSession::~HttpSession() noexcept
@@ -64,7 +71,7 @@ HttpSession::~HttpSession() noexcept
   CancelKeepAliveTimer(); 
   CancelConnectionTimeoutTimer();
 
-  server_->EraseOffset(this);
+  server_->EraseOffset(id_);
 }
 
 void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv_time)
@@ -114,33 +121,61 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
 void HttpSession::ServeFile()
 {
   auto fd = server_->GetFd(url_);
-
+  
   if (!fd) {
+    LOG_INFO << "fd address: " << fd.get();
     if (errno == ENOENT) {
       FillMetaError(
         HttpStatusCode::k404NotFound, 
         "The file does not exist");
     }
-    else {
+    else if (errno != 0) {
       FillMetaError(
         HttpStatusCode::k500InternalServerError, 
         "The page does exists, but error occurred in server");
       LOG_SYSERROR << "Failed to open the file: " << url_
           << "(But it exists)";
     }
+    else {
+      FillMetaError(
+        HttpStatusCode::k500InternalServerError, 
+        "Unknown error");
+      LOG_ERROR << "Unknown error of GetFd()";
+    }
     
     SendErrorResponse();
     return ;
   }
 
+  Stat stat;
+  bool success = stat.Open(*fd); KANON_UNUSED(success);
+  assert(success);
+
+  if (!stat.IsRegular() || !stat.IsUserR()) {
+    if (!stat.IsRegular()) {
+      LOG_DEBUG << "This file is not regular";
+    }
+
+    if (!stat.IsUserR()) {
+      LOG_DEBUG << "This file can't be read";
+    }
+
+    FillMetaError(
+      HttpStatusCode::k403Forbidden,
+      "Can't read requested file");
+    SendErrorResponse();
+    return;
+  }
+
   HttpResponse response(true);
 
-  off_t file_size = ::lseek(*fd, 0, SEEK_END);
-  ::lseek(*fd, 0, SEEK_SET);
+  off_t file_size = stat.GetFileSize();
+  cur_filesize_ = file_size;
 
   LOG_DEBUG << "file_size = " << file_size;
 
   response.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11)
+          .AddContentType(url_)
           .AddHeader("Content-Length", std::to_string(file_size));
 
   if (is_keep_alive_) {
@@ -149,34 +184,71 @@ void HttpSession::ServeFile()
   
   response.AddBlackLine();
 
-  server_->EmplaceOffset(this, 0);
+  
+  char buf[kFileBufferSize_];
+  auto readn = ::pread(*fd, buf, kFileBufferSize_ - response.GetBuffer().GetReadableSize(), 0);
 
-  conn_->SetWriteCompleteCallback([fd, this](TcpConnectionPtr const& conn) {
-    return SendFile(*fd);
-  });
+  response.GetBuffer().Append(buf, readn);
+  
+  if (readn < file_size) {
+    server_->EmplaceOffset(id_, readn);
 
-  LOG_DEBUG << "response: " << response.GetBuffer().ToStringView();
-  conn_->Send(response.GetBuffer());
+    LOG_DEBUG << "Sending file...";
+    conn_->SetWriteCompleteCallback([fd, session = shared_from_this()](TcpConnectionPtr const& conn) {
+      KANON_UNUSED(conn);
+      return session->SendFile(*fd);
+    });
 
-  LOG_TRACE << "Sending file...";
+    conn_->Send(response.GetBuffer());
+  } else {
+    LOG_DEBUG << "File has been sent";
+
+    conn_->Send(response.GetBuffer());
+    CloseConnection();
+  }
 }
 
 bool HttpSession::SendFile(int fd)
 {
+  LOG_DEBUG << "SendFile: " << this << ":" << id_;
   char buf[kFileBufferSize_];
 
-  auto off = server_->SearchOffset(this);
+  auto off = server_->SearchOffset(id_);
+
   assert(off);
   auto readn = ::pread(fd, buf, sizeof buf, *off);
+  
+  LOG_DEBUG << "readn = " << readn;
 
-  if (readn != 0) {
-    server_->offset_map_[this] += readn;
-    conn_->Send(buf, readn);
-    return false;
-  }
-  else {
-    LOG_TRACE << "File has been sent";
-    server_->EraseOffset(this);
+  if (readn < 0) {
+    LOG_ERROR << "pread error";
+    FillMetaError(HttpStatusCode::k500InternalServerError, "pread error");
+    SendErrorResponse();
+    return true;
+  } else if (readn > 0) {
+    server_->offset_map_[id_] += readn;
+
+    cache_filesize_ += readn;
+    if (cur_filesize_ == cache_filesize_) {
+      cache_filesize_ = 0;
+      cur_filesize_ = 0;
+      LOG_DEBUG << "File has been sent";
+      server_->EraseOffset(id_);
+
+      conn_->SetWriteCompleteCallback(WriteCompleteCallback());
+      conn_->Send(buf, readn);
+
+      CloseConnection();
+      return true;
+
+    } else {
+      conn_->Send(buf, readn);
+      return false;
+    }
+      
+  } else {
+    LOG_DEBUG << "File has been sent";
+    server_->EraseOffset(id_);
 
     conn_->SetWriteCompleteCallback(WriteCompleteCallback());
     CloseConnection();
@@ -236,9 +308,9 @@ void HttpSession::CloseConnection()
 {
   if (is_keep_alive_) {
     LOG_DEBUG << "Keep-Alive connection will keep 10s if no new message coming";
-    keep_alive_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
-      if (conn_) {
-        conn_->ShutdownWrite();
+    keep_alive_timer_id_ = conn_->GetLoop()->RunAfter([session = shared_from_this()]() {
+      if (session->conn_) {
+        session->conn_->ShutdownWrite();
       }
     }, 10);
   }
@@ -755,14 +827,33 @@ uint64_t HttpSession::Str2U64(std::string const& str)
 void HttpSession::SetHeaderMetadata()
 {
     auto iter = headers_.find("Connection");
-    if ((iter != std::end(headers_) && 
-        !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size() ) ) ||
-        HttpVersion::kHttp11 == version_) {
-      is_keep_alive_ = true;
+
+    switch (version_) {
+    case HttpVersion::kHttp10:
+      if (iter != headers_.end() && !::strncasecmp(iter->second.c_str(), "keep-alive", iter->second.size())) {
+        is_keep_alive_ = true;
+        LOG_DEBUG << "The connection is keep-alive";
+      } else {
+        is_keep_alive_ = false;
+        LOG_DEBUG << "The connection is close";
+      }
+      break;
+
+    case HttpVersion::kHttp11:
+      if (iter != headers_.end() && !::strncasecmp(iter->second.c_str(), "close", iter->second.size())) {
+        is_keep_alive_ = false;
+        LOG_DEBUG << "The connection is close";
+      } else {
+        is_keep_alive_ = true;
+        LOG_DEBUG << "The connection is keep-alive";
+      }
+      break;
+
+    case HttpVersion::kNotSupport:
+    default:
+      is_keep_alive_ = false;
       LOG_DEBUG << "The connection is keep-alive";
-    }
-    else {
-      LOG_DEBUG << "The connection is close";
+
     }
 
     iter = headers_.find("Content-Length");
@@ -791,4 +882,5 @@ void HttpSession::CancelConnectionTimeoutTimer()
     LOG_DEBUG << "The connection-timeout timer is canceled";
   }
 }
+
 } // namespace http
