@@ -23,13 +23,14 @@ int main(int argc, char* argv[])
     }
 
     EventLoop loop;
+
     InetAddr addr(options.port);
 
     HttpServer server(&loop, addr);
-
     server.SetLoopNum(options.thread_num);
     server.StartRun();
 
+    // loop.SetEdgeTriggerMode();
     loop.StartLoop();
   }
 
