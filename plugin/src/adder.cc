@@ -9,7 +9,7 @@ class Adder : public HttpDynamicResponseInterface {
   Adder() = default;
   ~Adder() = default;
 
-  HttpResponse GenResponseForGet(const ArgsMap &args) override
+  void GenResponseForGet(const ArgsMap &args, HttpResponse& response) override
   {
     int a = 0;
     int b = 0;
@@ -24,29 +24,26 @@ class Adder : public HttpDynamicResponseInterface {
       b = ::atoi(iter->second.c_str());
     }
 
-    HttpResponse response;
-
     char buf[4096];MemoryZero(buf);
-
     response.AddHeader("Content-type", "text/html")
             .AddBlackLine()
             .AddBody("<html>")
             .AddBody("<title>adder</title>")
             .AddBody("<body bgcolor=\"#ffffff\">")
             .AddBody("Welcome to add.com\r\n")
-            .AddBody(buf, "<p>The answer is: %d + %d = %d</p>\r\n", a, b, a + b)
+            .AddBody(buf, sizeof buf, "<p>The answer is: %d + %d = %d</p>\r\n", a, b, a + b)
             .AddBody("<p>Thanks for visiting!</p>\r\n")
             .AddBody("</body>")
             .AddBody("</html>\r\n");
 
-    return response;
+    conn_->Send(response.GetBuffer());
   }
 
-  HttpResponse GenResponseForPost(const std::string &body) override
+  void GenResponseForPost(const std::string &body, HttpResponse& response) override
   {
     auto args = ParseArgs(body);
 
-    return GenResponseForGet(args);    
+    return GenResponseForGet(args, response);    
   }
 };
 
