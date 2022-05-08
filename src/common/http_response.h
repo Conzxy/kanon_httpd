@@ -60,7 +60,12 @@ public:
   }
 
   Self& AddContentType(kanon::StringView filename) {
-    return AddHeader("Content-Type", GetFileType(filename));
+    auto val = GetFileType(filename);
+    if (val[0] != 0) {
+      return AddHeader("Content-Type", val);
+    }
+
+    return *this;
   }
 
   Self& AddChunkedTransferHeader() {

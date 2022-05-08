@@ -60,8 +60,10 @@ char const* HttpResponse::GetFileType(StringView filename) {
     return "image/gif";
   } else if (filename.ends_with(".html")) {
     return "text/html";
-  } else {
+  } else if (filename.ends_with(".txt")) {
     return "text/plain";
+  } else {
+    return "";
   }
 }
 
