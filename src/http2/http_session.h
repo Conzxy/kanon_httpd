@@ -14,6 +14,7 @@
 #include "common/http_response.h"
 #include "common/http_constant.h"
 #include "util/file.h"
+#include "unix/stat.h"
 
 
 namespace http {
@@ -21,7 +22,6 @@ namespace http {
 class HttpServer;
 
 class HttpSession : 
-  public std::enable_shared_from_this<HttpSession>,
   kanon::noncopyable {
 private:
   enum ParsePhase {
@@ -51,6 +51,7 @@ public:
   { return id_; }
 
   void Setup();
+  void Teardown();
 private:
   using MetaError = std::pair<HttpStatusCode, kanon::StringView>;
 
@@ -58,12 +59,14 @@ private:
 
   // Static contents
   void ServeFile();
-  bool SendFile(int fd);
+  bool SendFile(std::shared_ptr<int> const& fd);
+  bool SendFileOfMmap(std::shared_ptr<char*> const& addr);
 
   // Dynamic contents
   void ServeDynamicContent();
   ArgsMap SplitArgs();
 
+  void SetLastWriteComplete();
   void CloseConnection();
   void NotImplementation();
 
@@ -86,13 +89,15 @@ private:
   template<size_t N>
   void FillMetaErrorOfBadRequest(char const (&msg)[N])
   { FillMetaError(HttpStatusCode::k400BadRequest, msg); }
+  void FillErrorOfGetFdOrGetAddr();
+  bool FillErrorOfStat(unix::Stat& stat, bool success);
+
   void SendErrorResponse();
 
   // Timer control
   void CancelConnectionTimeoutTimer();
   void CancelKeepAliveTimer();
 
-  // Data
   /**
    * To access the data structure maintained by server
    */
@@ -114,7 +119,7 @@ private:
    */
   MetaError meta_error_;
 
-  /**
+  /*
    * The metadata for parsing header line of a http request
    */
   bool is_static_; /** Static page */
@@ -134,14 +139,14 @@ private:
    */
   std::string body_;
 
-  /** 
+  /**
    * To support long connection to reuse this connection,
    * set a timer, it will close this connection if 
    * peer don't send any message in 10s.
    */
   kanon::optional<kanon::TimerId> keep_alive_timer_id_;
 
-  /** 
+  /**
    * If a new connection is established and don't send any
    * message in 60s,  just close it.
    */
@@ -157,6 +162,7 @@ private:
   
   uint64_t cur_filesize_ = 0; 
   uint64_t cache_filesize_ = 0;
+
   // For debugging
   uint32_t id_;
   static kanon::AtomicCounter32 counter_;
