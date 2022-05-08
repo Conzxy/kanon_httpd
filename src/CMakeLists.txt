@@ -12,8 +12,10 @@ set(HTTP_SERVER_SRC_1
   ${COMMON_SRC} ${HTTP_SRC} ${UTIL_SRC} ${UNIX_SRC})
 
 set(HTTP_SERVER_SRC_2
-  ${COMMON_SRC} ${HTTP2_SRC} ${UTIL_SRC} ${CONFIG_SRC})
+  ${COMMON_SRC} ${HTTP2_SRC} ${UTIL_SRC} ${CONFIG_SRC} ${UNIX_SRC})
 
+message(STATUS "http common: ${COMMON_SRC}")
+message(STATUS "http_server_src_2: ${HTTP_SERVER_SRC_2}")
 ###########################################################
 # The http_common is useful for HttpDynamicResponse
 ###########################################################

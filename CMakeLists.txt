@@ -55,6 +55,7 @@ include_directories(${PROJECT_SOURCE_DIR}/src)
 # it explitly, and the build of static libraries is an option.
 set(BUILD_STATIC_LIBS OFF CACHE BOOL "Build static libraries")
 
+message(STATUS "The libraries will be stored in ${CMAKE_BINARY_DIR}/lib")
 macro (GenLib lib)
 	#if (Not ${BUILD_SHARED_LIBS})
 	if (${BUILD_STATIC_LIBS})
