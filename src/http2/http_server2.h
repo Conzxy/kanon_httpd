@@ -19,10 +19,6 @@ public:
 
   ~HttpServer() noexcept;
 private:
-  void EmplaceOffset(uint64_t session, off_t off);
-  void EraseOffset(uint64_t session);
-  kanon::optional<off_t> SearchOffset(uint64_t session);
-
   // Cache factory method
   // @see Modern Effective C++ Item 21
   std::shared_ptr<int> GetFd(std::string const& path);
@@ -33,9 +29,6 @@ private:
 
   kanon::MutexLock mutex_addr_;
   std::unordered_map<std::string, std::weak_ptr<char*>> addr_map_;
-
-  kanon::RWLock lock_offset_;
-  std::unordered_map<uint64_t, off_t> offset_map_;
 };
 
 } // namespace http

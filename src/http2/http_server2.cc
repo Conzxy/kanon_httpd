@@ -57,32 +57,6 @@ HttpServer::~HttpServer() noexcept
   LOG_FATAL << "HttpServer crash";
 }
 
-void HttpServer::EmplaceOffset(uint64_t session, off_t off)
-{
-  WLockGuard guard(lock_offset_);
-  auto success = offset_map_.emplace(session, off);KANON_UNUSED(success);
-
-  KANON_ASSERT(success.second, "Session has been emplaced?");
-}
-
-void HttpServer::EraseOffset(uint64_t session)
-{
-  WLockGuard guard(lock_offset_);
-  auto n = offset_map_.erase(session);KANON_UNUSED(n);
-}
-
-kanon::optional<off_t> HttpServer::SearchOffset(uint64_t session)
-{
-  RLockGuard guard(lock_offset_);
-  auto iter = offset_map_.find(session);
-
-  if (iter == std::end(offset_map_)) {
-    return kanon::make_null_optional<off_t>();
-  }
-
-  return kanon::make_optional(iter->second);
-}
-
 std::shared_ptr<int> HttpServer::GetFd(std::string const& path)
 {
   /* 
