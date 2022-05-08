@@ -1,6 +1,8 @@
 #ifndef KANON_HTTP_RESPONSE_H
 #define KANON_HTTP_RESPONSE_H
 
+#include <stdarg.h>
+
 #include "http_constant.h"
 
 #include "kanon/string/string_view.h"
@@ -19,11 +21,16 @@ class HttpResponse {
 public:
   using Self = HttpResponse;
 
-  explicit HttpResponse(const bool has_length = false)
+  /**
+   * \param known_length If length is unknown, will computed by HttpResponse
+   */
+  explicit HttpResponse(const bool known_length = false)
     : buffer_()
-    , body_(has_length ? 0 : 4096)
-    , has_length_(has_length)
+    , known_length_(known_length)
   { 
+    if (!known_length) {
+      body_.reserve(4096);
+    }
   }
 
   Self& AddHeaderLine(HttpStatusCode code, HttpVersion ver) {
@@ -52,11 +59,22 @@ public:
     return *this;
   }
 
+  Self& AddContentType(kanon::StringView filename) {
+    return AddHeader("Content-Type", GetFileType(filename));
+  }
+
+  Self& AddChunkedTransferHeader() {
+    // Disable length header
+    known_length_ = true;
+    chunked = true;
+    return AddHeader("Transfer-Encoding", "chunked");
+  }
+
   /**
    * Add blankline after header lines.
    */
   Self& AddBlackLine() {
-    if (has_length_) {
+    if (known_length_) {
       buffer_.Append("\r\n");
     }
 
@@ -68,36 +86,57 @@ public:
    * @param content body content
    */
   Self& AddBody(kanon::StringView content) {
-    if (has_length_) {
-      buffer_.Append(content);
+    return AddBody(content.data(), content.size());
+  }
+
+  Self& AddBody(char const* data, size_t len) {
+    if (known_length_) {
+      buffer_.Append(data, len);
     }
     else {
-      body_.Append(content);
+      body_.insert(body_.end(), data, data + len);
     }
+
     return *this;
   }
 
-  template<size_t N>
-  Self& AddBody(char const(&buf)[N]) {
-    return AddBody(kanon::MakeStringView(buf));
-  }
-
-  template<typename ...Args>
-  Self& AddBody(char* buf, size_t len, kanon::StringArg fmt, Args... args) {
-    body_.Append(kanon::StringView(buf, ::snprintf(buf, len, fmt.data(), args...)));
+  Self& AddBody(char* buf, size_t len, char const* fmt, ...) {
+    va_list vl;
+    va_start(vl, fmt);
+    auto n = ::vsnprintf(buf, len, fmt, vl); 
+    va_end(vl);
+    AddBody(kanon::StringView(buf, n));
     return *this;
   }
 
-  template<unsigned N, typename ...Args>
-  Self& AddBody(char(&buf)[N], kanon::StringArg fmt, Args... args) {
-    return AddBody(buf, N, fmt, args...);
+
+  Self& AddChunk(char const* data, size_t len) {
+    assert(chunked);
+    buffer_.Append(Dec2Hex(len));
+    buffer_.Append("\r\n");
+    buffer_.Append(data, len);
+    buffer_.Append("\r\n");
+    return *this;
   }
 
-  Self& AddContentType(kanon::StringView filename) {
-    return AddHeader("Content-Type", GetFileType(filename));
+  Self& AddChunk(char* buf, size_t len, char const* fmt, ...) {
+    va_list vl;
+
+    va_start(vl, fmt);
+    auto n = ::vsnprintf(buf, len, fmt, vl); 
+    va_end(vl);
+
+    AddChunk(buf, n);
+    return *this;
   }
 
+  Self& AddChunk(kanon::StringView data) {
+    return AddChunk(data.data(), data.size());
+  }
+
+  size_t GetBodySize() const noexcept { return body_.size(); }
   kanon::Buffer& GetBuffer();
+
 private:
   /**
    * Add version code in response line.
@@ -123,11 +162,13 @@ private:
     return *this;
   }
 
+  static std::string Dec2Hex(size_t num);
   static char const* GetFileType(kanon::StringView filename);
 
   kanon::Buffer buffer_;
-  kanon::Buffer body_;
-  bool has_length_ = false;
+  std::vector<char> body_;
+  bool known_length_ = false;
+  bool chunked = false;
 };
 
 HttpResponse GetClientError(
