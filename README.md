@@ -21,7 +21,7 @@ Allowed options:
 ```
 * The default port is `80`, but you can modify it in the range of unsigned 16 bit integer.
 * The number of other `IO threads` is `0` default, you can set to non-zero, then main thread just accept new connection and other threads handle IO events, this is supported by `kanon`.
-* I provide a configuration file, but you should change its contents, and the default search location is `kanon_httpd.conf` in current working directory(i.e. `./`), so you should put executable file with it to same directory.
+* I provide a configuration file, but you should change its contents, and the default search location is `.kanon_httpd.conf` in current working directory(i.e. `./`), so you should put executable file with it to same directory.
 * The output of log information can be terminal or file, and you can privide the log location that is `${HOME}/.log` default, this is also support by `kanon`.
 
 ## Build
@@ -38,7 +38,8 @@ mkdir build && cd build && \
 # -G Ninja(default: Unix Makefiles), ninja need install
 # -DCMAKE_BUILD_TYPE=Debug/...(default: Release)
 cmake .. && \
-cmake --build . -j 2 && \
+cmake --build . -j 2 --target http_common && \
+cmake --build . -j 2 --target httpd_kanon && \
 cmake -DGEN_PLUGIN=ON ..
 # Then, you can check ./lib/ if has three *.so files
 # , ../resources/contents/adder and ../bin/httpd_kanon
