@@ -10,6 +10,7 @@ struct HttpConfig {
   std::string root_path;
   std::string hostname;
   std::string homepage_name;
+  bool use_mmap;
 };
 
 extern HttpConfig g_config;
