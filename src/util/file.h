@@ -59,21 +59,9 @@ public:
 
   bool ReadLine(std::string& line, const bool need_newline = true);
 
-  // void Write(char const* buf, size_t len) noexcept;
-
-  // void Append(char const* buf, size_t len) noexcept;
-
-  // template<size_t N>
-  // void Write(char const(&buf)[N]) noexcept
-  // {
-  //   Write(buf, N);
-  // }
-
-  // template<size_t N>
-  // void Append(char const(&buf)[N]) noexcept
-  // {
-  //   Append(buf, N);
-  // }
+  void Write(char const* buf, size_t len) noexcept {
+    ::fwrite(buf, 1, len, fp_);
+  }
 
   bool IsValid() const noexcept { return fp_ != NULL; }
 

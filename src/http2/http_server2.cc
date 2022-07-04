@@ -54,7 +54,6 @@ HttpServer::HttpServer(EventLoop* loop, InetAddr const& addr)
 
 HttpServer::~HttpServer() noexcept
 {
-  LOG_FATAL << "HttpServer crash";
 }
 
 std::shared_ptr<int> HttpServer::GetFd(std::string const& path)

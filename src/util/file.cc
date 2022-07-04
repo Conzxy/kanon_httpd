@@ -144,6 +144,8 @@ bool File::ReadLine(std::string& line, const bool need_newline)
           else {
             line.append(buf, n - 1);
           }
+        } else {
+          line.append(buf, n);
         }
         break;
       }
