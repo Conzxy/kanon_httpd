@@ -1,8 +1,6 @@
 #include "http2/http_server2.h"
 
 #include "kanon/log/async_log.h"
-//#include "util/cmdline_parse.h"
-//#include "config/http_options.h"
 #include "config/http_config.h"
 
 #include "takina/takina.h"
