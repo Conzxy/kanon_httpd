@@ -43,7 +43,7 @@ endif()
 string(REPLACE ";" " " CMAKE_CXX_FLAGS "${CXX_FLAGS}")
 
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
-message(STATUS "BUILD_TYPE: ${CAMKE_BUILD_TYPE}")
+message(STATUS "BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
 include_directories(${PROJECT_SOURCE_DIR}/src)
 

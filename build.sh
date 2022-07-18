@@ -1,12 +1,12 @@
-mkdir build && cd build && \
 # Options:
 # -DBUILD_ALL_TESTS=ON(default: OFF)
 # -DBUILD_STATIC_LIBS=ON(default: OFF)
 # -G Ninja(default: Unix Makefiles), ninja need install
 # -DCMAKE_BUILD_TYPE=Debug/...(default: Release)
+cd build
 cmake .. && \
+cmake --build . -j 2 --target httpd && \
 cmake --build . -j 2 --target http_common && \
-cmake --build . -j 2 --target httpd_kanon && \
 cmake -DGEN_PLUGIN=ON ..
 # Then, you can check ./lib/ if has three *.so files
 # , ../resources/contents/adder and ../bin/httpd_kanon

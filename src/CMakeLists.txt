@@ -25,6 +25,8 @@ GenLib(http_server_src2 ${HTTP_SERVER_SRC_2})
 
 set(BUILD_SERVER_2 ON CACHE BOOL "Control if build the http server2")
 
+set(HTTPD_NAME "httpd")
+
 if (NOT ${BUILD_SERVER_2})
   add_executable(httpd_kanon1 http/http_server.cc main.cc)
   target_link_libraries(httpd_kanon1 kanon_base kanon_net http_server_src1)
@@ -33,9 +35,9 @@ if (NOT ${BUILD_SERVER_2})
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin
     COMMOND http_server1)
 else ()
-  add_executable(httpd_kanon main2.cc http2/http_server2.cc)
-  target_link_libraries(httpd_kanon kanon_base kanon_net http_server_src2 boost_program_options dl)
-  set_target_properties(httpd_kanon
+  add_executable(${HTTPD_NAME} main2.cc http2/http_server2.cc)
+  target_link_libraries(${HTTPD_NAME} kanon_base kanon_net http_server_src2 dl)
+  set_target_properties(${HTTPD_NAME}
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin
     COMMOND http_server2)
