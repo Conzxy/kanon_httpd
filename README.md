@@ -3,7 +3,7 @@
 `kanon_httpd`是一个简易http服务器。其网络模块依赖于个人编写的[kanon](https://github.com/Conzxy/kanon)网络库，因此只能在**linux/unix-like**平台上运行（暂不考虑跨平台）。<br>
 该服务器可以接受和处理http请求并返回静态或动态页面。同时，也支持长连接和短连接(i.e. `keep-alive`)。
 
-相较于传统的`CGI + fork-and-execute`模型返回动态页面，我使用较为现代的方式：将**共享目标文件(shared object file, e.g. \*.so)**作为`插件(plugin)`来提供这类服务。
+相较于传统的`CGI + fork-and-execute`模型返回动态页面，我使用较为现代的方式：将**共享目标文件(shared object file, e.g. \*.so)** 作为`插件(plugin)`来提供这类服务。
 
 动态内容的提供者需要实现[准备好的的接口类](https://github.com/Conzxy/kanon_httpd/blob/master/src/plugin/http_dynamic_response_interface.h)，至于生成的共享文件放哪取决于你自己，包括生成方法。
 
