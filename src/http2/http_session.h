@@ -15,82 +15,45 @@
 #include "common/http_constant.h"
 #include "util/file.h"
 #include "unix/stat.h"
-
+#include "http_error.h"
+#include "http_request.h"
 
 namespace http {
 
 class HttpServer;
 
-class HttpSession : 
-  kanon::noncopyable {
-private:
-  enum ParsePhase {
-    kHeaderLine = 0,
-    kHeaderFields,
-    kBody,
-    kFinished,
-  };
-
-  enum ParseResult {
-    kGood = 0,
-    kShort,
-    kError,
-  };
-
-public:
+class HttpSession : kanon::noncopyable {
+ public:
   HttpSession();
 
-  explicit HttpSession(HttpServer& server, kanon::TcpConnectionPtr const& conn);
+  HttpSession(HttpServer& server, kanon::TcpConnectionPtr const& conn);
   ~HttpSession() noexcept;
 
   // For debugging 
-  void GetErrorResponse() const
-  { GetClientError(meta_error_.first, meta_error_.second); }
-
   uint32_t GetId() const noexcept
   { return id_; }
 
   void Setup();
   void Teardown();
 private:
-  using MetaError = std::pair<HttpStatusCode, kanon::StringView>;
 
   void OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeStamp recv);
 
   // Static contents
-  void ServeFile();
-  bool SendFile(std::shared_ptr<int> const& fd);
-  bool SendFileOfMmap(std::shared_ptr<char*> const& addr);
+  void ServeFile(HttpRequest const& request);
+  bool SendFile(std::shared_ptr<int> const& fd, HttpRequest const& request);
+  bool SendFileOfMmap(std::shared_ptr<char*> const& addr, HttpRequest const& request);
 
   // Dynamic contents
-  void ServeDynamicContent();
-  ArgsMap SplitArgs();
+  void ServeDynamicContent(HttpRequest const& request);
 
-  void SetLastWriteComplete();
-  void CloseConnection();
-  void NotImplementation();
-
-  // Parse http request
-  ParseResult Parse(kanon::Buffer& buffer);
-  ParseResult ParseHeaderLine(kanon::StringView header_line);
-  ParseResult ParseComplexUrl();
-  ParseResult ParseHeaderField(kanon::StringView header);
-  ParseResult ExtractBody(kanon::Buffer& buffer);
-  void ParseMethod(kanon::StringView method) noexcept;
-  void ParseVersionCode(int version_code) noexcept;
-  void Reset();
-  void SetHeaderMetadata();
-
-  uint64_t Str2U64(std::string const& str);
+  void SetLastWriteComplete(HttpRequest const& request);
+  void CloseConnection(HttpRequest const& request);
+  void NotImplementation(HttpRequest const& request);
 
   // Error handling
-  template<size_t N>
-  void FillMetaError(HttpStatusCode code, char const (&msg)[N]);
-  template<size_t N>
-  void FillMetaErrorOfBadRequest(char const (&msg)[N])
-  { FillMetaError(HttpStatusCode::k400BadRequest, msg); }
-  void FillErrorOfGetFdOrGetAddr();
-  bool FillErrorOfStat(unix::Stat& stat, bool success);
+  void SetErrorOfGetFdOrGetAddr(HttpRequest const& request);
+  bool SetErrorOfStat(unix::Stat& stat, bool success);
 
   void SendErrorResponse();
 
@@ -110,34 +73,9 @@ private:
   TcpConnectionPtr conn_;
 
   /**
-   * Main state machine metadata
-   */
-  ParsePhase parse_phase_;
-
-  /**
    * Error metadata, used to construct error response
    */
-  MetaError meta_error_;
-
-  /*
-   * The metadata for parsing header line of a http request
-   */
-  bool is_static_; /** Static page */
-  bool is_complex_; /** Complex URL, e.g. %Hex Hex */
-  std::string url_; /** The URL part */
-  std::string query_; /** query string */
-  HttpMethod method_; /** method of header line */
-  HttpVersion version_; /** version code of header line */
-
-  /**
-   * Store the header fields
-   */
-  HeaderMap headers_;
-
-  /**
-   * Store the body of a http request
-   */
-  std::string body_;
+  HttpError error_{.code=HttpStatusCode::k400BadRequest};
 
   /**
    * To support long connection to reuse this connection,
@@ -152,14 +90,6 @@ private:
    */
   kanon::optional<kanon::TimerId> connection_timer_id_;
 
-  bool is_keep_alive_; /** Determine if a keep-alive connection */
-
-  /**
-   * Due to short read, we should cache content length
-   * in case search the fields in headers_
-   */
-  uint64_t content_length_;
-  
   uint64_t cur_filesize_ = 0; 
   uint64_t cache_filesize_ = 0;
 
@@ -169,12 +99,6 @@ private:
 
   static constexpr int32_t kFileBufferSize_ = 1 << 16;
 };
-
-template<size_t N>
-void HttpSession::FillMetaError(HttpStatusCode code, char const (&msg)[N])
-{
-  meta_error_ = MetaError(code, kanon::MakeStringView(msg));
-}
 
 } // namespace http
 
