@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
 
   std::string err_msg;
   if (takina::Parse(argc, argv, &err_msg)) {
+    takina::Teardown();
     SetConfigParameters(options.config_name);
 
     if (options.log_file) {

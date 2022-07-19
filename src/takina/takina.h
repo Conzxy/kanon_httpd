@@ -117,6 +117,7 @@ static std::vector<std::string const*> sections;
 // static std::string const* cur_section;
 // static std::string cur_option;
 
+
 namespace detail {
 
 void _AddOption(OptDesc&& desc, OptionParameter opt_param);
@@ -175,7 +176,7 @@ _DEFINE_ADD_OPTION_FIXED(std::string, OT_FSTR)
 _DEFINE_ADD_OPTION_FIXED(int, OT_FINT)
 _DEFINE_ADD_OPTION_FIXED(double, OT_FDOUBLE)
 
-#define _OPTION_PROCESS(_map) \
+#define _CHECK_OPTION_EXISTS(_map) \
           auto iter = _map.find(cur_option); \
           if (iter == _map.end()) { \
             *errmsg = "Option: "; \
@@ -184,7 +185,7 @@ _DEFINE_ADD_OPTION_FIXED(double, OT_FDOUBLE)
             return false; \
           }
 
-#define _OPTION_PROCESS2 \
+#define _VOID_OPTION_PROCESS \
           if (cur_param->type == OT_VOID) { \
             *(bool*)(cur_param->param) = true; \
           }
@@ -232,17 +233,17 @@ inline bool Parse(int argc, char** argv, std::string* errmsg) {
       // long option
       if (arg[1] == '-') {
         cur_option = std::string(&arg[2], len-2);
-        _OPTION_PROCESS(long_param_map)
+        _CHECK_OPTION_EXISTS(long_param_map)
 
         cur_param = &iter->second;
-        _OPTION_PROCESS2
+        _VOID_OPTION_PROCESS
       } else {
         // short option
         cur_option = std::string(&arg[1], len-1);
-        _OPTION_PROCESS(short_param_map)
+        _CHECK_OPTION_EXISTS(short_param_map)
 
         cur_param = iter->second;
-        _OPTION_PROCESS2
+        _VOID_OPTION_PROCESS
       }
     } else {
       // Non option arguments
@@ -481,7 +482,53 @@ inline bool _SetParamater(OptionParameter* param, char const* arg, int cur_arg_n
   return true;
 }
 
+template<typename T>
+inline void _DestroyObject(T* obj) {
+  obj->~T();
+}
+
+inline void _Teardown(std::string* str) {
+  str->clear();
+  str->shrink_to_fit();
+}
+
+template<typename T>
+inline void _Teardown(std::vector<T>* vec) {
+  vec->clear();
+  vec->shrink_to_fit();
+}
+
+template<typename T>
+inline void _Teardown(T* cont) {
+  cont->clear();
+}
+
 } // namespace detail
+
+#define _TAKINA_DESTROY_OBJ(obj) (detail::_DestroyObject(obj))
+#define _TAKINA_TEARDOWN(obj) (detail::_Teardown(obj))
+
+inline void Teardown() {
+#if 1
+  _TAKINA_TEARDOWN(&help);
+  _TAKINA_TEARDOWN(&usage);
+  _TAKINA_TEARDOWN(&description);
+  _TAKINA_TEARDOWN(&long_param_map);
+  _TAKINA_TEARDOWN(&short_param_map);
+  _TAKINA_TEARDOWN(&section_opt_map);
+  _TAKINA_TEARDOWN(&sections);
+  _TAKINA_TEARDOWN(&options);
+#else
+  _TAKINA_DESTROY_OBJ(&help);
+  _TAKINA_DESTROY_OBJ(&usage);
+  _TAKINA_DESTROY_OBJ(&description);
+  _TAKINA_DESTROY_OBJ(&long_param_map);
+  _TAKINA_DESTROY_OBJ(&short_param_map);
+  _TAKINA_DESTROY_OBJ(&section_opt_map);
+  _TAKINA_DESTROY_OBJ(&sections);
+  _TAKINA_DESTROY_OBJ(&options);
+#endif
+}
 
 
 } // namespace takina
