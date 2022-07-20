@@ -25,6 +25,7 @@ HttpServer::HttpServer(EventLoop* loop, InetAddr const& addr)
       auto session = std::make_shared<HttpSession>(*this, conn);
       session->Setup();
       LOG_DEBUG << "[Session #" << session->GetId() << "] constructed";
+      LOG_INFO << conn->GetPeerAddr().ToIp() << " connected";
       conn->SetContext(std::move(session));
     }
     else {
@@ -43,7 +44,7 @@ HttpServer::HttpServer(EventLoop* loop, InetAddr const& addr)
       conn->SetWriteCompleteCallback(WriteCompleteCallback());
       session->Teardown();
       LOG_DEBUG << "ref-count = " << session.use_count();
-
+      LOG_INFO << conn->GetPeerAddr().ToIp() << " disconnected";
       session.reset();
     }
 

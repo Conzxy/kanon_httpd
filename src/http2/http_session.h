@@ -51,7 +51,14 @@ private:
   void CloseConnection(HttpRequest const& request);
   void NotImplementation(HttpRequest const& request);
 
+  // Log 
+ 
+  void LogError();
+  void LogClose();
+  void LogRequest(HttpRequest const& request);
+
   // Error handling
+
   void SetErrorOfGetFdOrGetAddr(HttpRequest const& request);
   bool SetErrorOfStat(unix::Stat& stat, bool success);
 

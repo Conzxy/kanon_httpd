@@ -14,7 +14,9 @@
 #include "common/http_response.h"
 #include "common/http_constant.h"
 #include "common/parse_args.h"
+
 #include "config/http_config.h"
+
 #include "http2/http_parser.h"
 #include "http2/http_request.h"
 #include "plugin/plugin_loader.h"
@@ -26,6 +28,9 @@
 
 using namespace kanon;
 using namespace unix;
+
+#define _PEER_IP \
+  conn_->GetPeerAddr().ToIp()
 
 namespace http {
 
@@ -49,8 +54,9 @@ HttpSession::HttpSession(HttpServer& server, TcpConnectionPtr const& conn)
 
 void HttpSession::Setup() {
   LOG_DEBUG << "This new established connection will be closed after 60s if no message coming";
-  connection_timer_id_ = conn_->GetLoop()->RunAfter([session = this]() {
-    session->conn_->ShutdownWrite();
+  connection_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
+    LogClose();
+    conn_->ShutdownWrite();
   }, 60);
 
   conn_->SetMessageCallback(std::bind(
@@ -83,20 +89,18 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
   HttpParser::ParseResult ret;
 
   if ( (ret = parser.Parse(buffer, &request) ) == HttpParser::kGood) {
-    if (request.url == "/") {
+    if (request.url == "/")
       request.url += g_config.homepage_path;
-    }
+    LogRequest(request);
     request.url.insert(0, g_config.root_path.data(), g_config.root_path.size());
-    LOG_DEBUG << "content_path = " << request.url;
 
     switch (request.method) {
-      case HttpMethod::kGet:
-        if (request.is_static) {
+      case HttpMethod::kGet: {
+        if (request.is_static)
           ServeFile(request);
-        }
-        else {
+        else
           ServeDynamicContent(request);
-        }
+      }
       break;
 
       case HttpMethod::kPost:
@@ -105,7 +109,7 @@ void HttpSession::OnMessage(TcpConnectionPtr const& conn, Buffer& buffer, TimeSt
 
       default:
         NotImplementation(request);
-    }      
+    }
   }
 
   if (ret == HttpParser::kError) {
@@ -120,7 +124,7 @@ void HttpSession::ServeFile(HttpRequest const& req)
   bool success = stat.Open(req.url);
 
   if (SetErrorOfStat(stat, success)) {
-    return ;
+    return;
   }
 
   HttpResponse response(true);
@@ -133,6 +137,8 @@ void HttpSession::ServeFile(HttpRequest const& req)
   response.AddHeaderLine(HttpStatusCode::k200OK, HttpVersion::kHttp11)
           .AddContentType(req.url)
           .AddHeader("Content-Length", std::to_string(file_size));
+
+  LOG_INFO << _PEER_IP << " 200 OK";
 
   if (req.is_keep_alive) {
     response.AddHeader("Connection", "Keep-Alive")
@@ -272,6 +278,7 @@ void HttpSession::ServeDynamicContent(HttpRequest const& req)
   assert(!req.is_static);
 
   LOG_DEBUG << "query = " << req.query;
+  LOG_INFO << _PEER_IP << " " << req.query;
   auto error = loader.Open(req.url);
 
   if (error) {
@@ -309,12 +316,14 @@ void HttpSession::CloseConnection(HttpRequest const& req)
 {
   if (req.is_keep_alive) {
     LOG_DEBUG << "Keep-Alive connection will keep 5s if no new message coming";
-    keep_alive_timer_id_ = conn_->GetLoop()->RunAfter([session = this]() {
-      session->conn_->ShutdownWrite();
+    keep_alive_timer_id_ = conn_->GetLoop()->RunAfter([this]() {
+      LogClose();
+      conn_->ShutdownWrite();
     }, 5);
   }
   else {
     LOG_DEBUG << "Non-Keep-Alive(Close) Connection will be closed at immediately";
+    LogClose();
     conn_->ShutdownWrite();
   }
 }
@@ -325,11 +334,13 @@ void HttpSession::SendErrorResponse()
   LOG_DEBUG << "Error: (" << GetStatusCode(error_.code)
     << ", " << GetStatusCodeString(error_.code)
     << ", " << error_.msg << ")";
-
+  
+  LogError();
   conn_->Send(GetClientError(
     error_.code, error_.msg).GetBuffer());
 
   CancelKeepAliveTimer();
+  LogClose();
   conn_->ShutdownWrite();
 }
 
@@ -337,10 +348,9 @@ void HttpSession::NotImplementation(HttpRequest const& req)
 {
   LOG_TRACE << "The service of " << GetMethodString(req.method) << " is not implemeted";
 
-  conn_->Send(GetClientError(
-    HttpStatusCode::k501NotImplemeted,
-    "The service is not implemeted").GetBuffer());
-  conn_->ShutdownWrite();
+  error_ = {HttpStatusCode::k501NotImplemeted,
+            "The service is not implemeted"};
+  SendErrorResponse();
 }
 
 void HttpSession::CancelKeepAliveTimer()
@@ -420,6 +430,24 @@ void HttpSession::SetLastWriteComplete(HttpRequest const& req) {
     session->CloseConnection(req);
     return true;
   });
+}
+
+inline void HttpSession::LogError() {
+  LOG_INFO << _PEER_IP << " " 
+    << GetStatusCode(error_.code) << " " 
+    << GetStatusCodeString(error_.code) << " " 
+    << error_.msg;
+}
+
+inline void HttpSession::LogClose() {
+}
+
+inline void HttpSession::LogRequest(HttpRequest const& request) {
+  LOG_INFO << _PEER_IP << " " 
+    << request.url << " "
+    << GetMethodString(request.method) << " "
+    << GetHttpVersionString(request.version) << " "
+    << ((request.is_keep_alive)? "keep_alive" : "close");
 }
 
 } // namespace http
